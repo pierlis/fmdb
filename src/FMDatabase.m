@@ -6,6 +6,7 @@
 
 - (FMResultSet *)executeQuery:(NSString *)sql withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args;
 - (BOOL)executeUpdate:(NSString*)sql error:(NSError**)outErr withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args;
+- (BOOL)expandCollectionArgumentsInSQL:(NSString *)sql withArgumentsInArray:(NSArray *)arguments intoSQL:(NSString * FMDBAutoreleasing *)outExpandedSQL arguments:(NSArray * FMDBAutoreleasing *)outExpandedArguments error:(NSError * FMDBAutoreleasing *)outError;
 @end
 
 @implementation FMDatabase
@@ -745,114 +746,19 @@
 }
 
 - (FMResultSet *)executeQuery:(NSString *)sql withArgumentsInArray:(NSArray *)arguments {
-
-    // Basic support for binding `?` to an NSArray, NSSet, NSOrderedSet arguments:
-    //
-    // Replace the `?` characters bound to such arguments with a comma-separated
-    // list of question marks, `?,?,...`, with as many parameters as there are
-    // in the enumerable, and flatten the arguments array.
-    //
-    // Caveat 1: we do not process queries containing `?` characters that are not
-    // parameters (such as question marks embedded in literal strings). We only
-    // process queries if and only if there is the same number of question marks
-    // and arguments.
-    //
-    // Caveat 2: we do not process queries containing `?NNN` parameters.
     
-    // enumerableIndexSet contain indexes of enumerable arguments
+    // Expand `?` bound to arrays & sets
+    NSString *expandedSQL = nil;
+    NSArray *expandedArguments = nil;
+    NSError *error;
     
-    Class NSOrderedSetClass = NSClassFromString(@"NSOrderedSet");   // NSOrderedSet class may not exist yet.
-    NSMutableIndexSet *enumerableIndexSet = [NSMutableIndexSet indexSet];
-    NSUInteger argumentsCount = arguments.count;
-    for (NSUInteger i = 0; i < argumentsCount; ++i) {
-        id argument = [arguments objectAtIndex:i];
-        if ([argument isKindOfClass:[NSArray class]]) {
-            [enumerableIndexSet addIndex:i];
-        }
-        else if ([argument isKindOfClass:[NSSet class]]) {
-            [enumerableIndexSet addIndex:i];
-        }
-        else if (NSOrderedSetClass && [argument isKindOfClass:NSOrderedSetClass]) {
-            [enumerableIndexSet addIndex:i];
-        }
+    if ([self expandCollectionArgumentsInSQL:sql withArgumentsInArray:arguments intoSQL:&expandedSQL arguments:&expandedArguments error:&error]) {
+        sql = expandedSQL;
+        arguments = expandedArguments;
     }
-    
-    if (enumerableIndexSet.count > 0) {
-        
-        // We have enumerable argument(s).
-        // Now check that we have as many question marks as we have arguments.
-        
-        NSArray *SQLChunks = [sql componentsSeparatedByString:@"?"];
-        NSUInteger SQLChunkCount = SQLChunks.count;
-        
-        if (SQLChunkCount == argumentsCount + 1) {
-            
-            // We have as many `?` as we have arguments.
-            // Now check that none of them are `?NNN` positioned parameters:
-            
-            BOOL queryContainsPositionedParameters = NO;
-            for (NSUInteger i = 1; i < SQLChunkCount; ++i) {
-                NSString *SQLChunk = [SQLChunks objectAtIndex:i];
-                unichar characterFollowingQuestionMark = [SQLChunk characterAtIndex:0];
-                if (characterFollowingQuestionMark >= '0' && characterFollowingQuestionMark <= '9') {
-                    queryContainsPositionedParameters = YES;
-                    break;
-                }
-            }
-            
-            
-            if (!queryContainsPositionedParameters) {
-                
-                // OK, let's process the query
-                
-                NSMutableArray *rewrittenArguments = [NSMutableArray array];                // flat arguments
-                NSMutableString *rewrittenSQL = [[SQLChunks objectAtIndex:0] mutableCopy];  // query with expanded `?,?,...`
-                NSEnumerator *SQLChunkEnumerator = [SQLChunks objectEnumerator];
-                [SQLChunkEnumerator nextObject];
-                
-                for (NSUInteger i = 0; i < argumentsCount; ++i) {
-                    id argument = [arguments objectAtIndex:i];
-                    
-                    if ([enumerableIndexSet containsIndex:i]) {
-                        
-                        // enumerable argument
-                        
-                        BOOL initial = YES;
-                        for (id object in argument) {
-                            if (initial) {
-                                [rewrittenSQL appendString:@"?"];
-                            } else {
-                                [rewrittenSQL appendString:@",?"];
-                            }
-                            [rewrittenArguments addObject:object];
-                            initial = NO;
-                        }
-                    }
-                    else {
-                        
-                        // non-enumerable argument
-                        
-                        [rewrittenSQL appendString:@"?"];
-                        [rewrittenArguments addObject:argument];
-                    }
-                    
-                    [rewrittenSQL appendString:[SQLChunkEnumerator nextObject]];
-                }
-                
-                sql = rewrittenSQL;
-                arguments = rewrittenArguments;
-            }
-            else {
-                // We do not support `?NNN` positioned parameters.
-                // Leave SQL and arguments untouched, but emit a warning, because the user will be bitten.
-                NSLog(@"%@ warning: NSArray arguments could not be bound, because the query contains a `?NNN` parameter.", self);
-            }
-        }
-        else {
-            // We do not have as many `?` as we have arguments: we don't know which ones are bound to arrays :-(
-            // Leave SQL and arguments untouched, but emit a warning, because the user will be bitten.
-            NSLog(@"%@ warning: NSArray arguments could not be bound. You may flatten arguments, and provide as many matching `?` in the query.", self);
-        }
+    else {
+        // Log expansion errors, and process raw input
+        NSLog(@"warning: %@", error.localizedDescription);
     }
     
     return [self executeQuery:sql withArgumentsInArray:arguments orDictionary:nil orVAList:nil];
@@ -1090,7 +996,22 @@
 }
 
 - (BOOL)executeUpdate:(NSString*)sql withArgumentsInArray:(NSArray *)arguments {
-    return [self executeUpdate:sql error:nil withArgumentsInArray:arguments orDictionary:nil orVAList:nil];
+    
+    // Expand `?` bound to arrays & sets
+    NSString *expandedSQL = nil;
+    NSArray *expandedArguments = nil;
+    NSError *error;
+    
+    if ([self expandCollectionArgumentsInSQL:sql withArgumentsInArray:arguments intoSQL:&expandedSQL arguments:&expandedArguments error:&error]) {
+        sql = expandedSQL;
+        arguments = expandedArguments;
+    }
+    else {
+        // Log expansion errors, and process raw input
+        NSLog(@"warning: %@", error.localizedDescription);
+    }
+    
+    return [self executeUpdate:expandedSQL error:nil withArgumentsInArray:expandedArguments orDictionary:nil orVAList:nil];
 }
 
 - (BOOL)executeUpdate:(NSString*)sql withParameterDictionary:(NSDictionary *)arguments {
@@ -1283,6 +1204,113 @@ void FMDBBlockSQLiteCallBackFunction(sqlite3_context *context, int argc, sqlite3
 #else
     sqlite3_create_function([self sqliteHandle], [name UTF8String], count, SQLITE_UTF8, (__bridge void*)b, &FMDBBlockSQLiteCallBackFunction, 0x00, 0x00);
 #endif
+}
+
+- (BOOL)expandCollectionArgumentsInSQL:(NSString *)sql withArgumentsInArray:(NSArray *)arguments intoSQL:(NSString * FMDBAutoreleasing *)outExpandedSQL arguments:(NSArray * FMDBAutoreleasing *)outExpandedArguments error:(NSError * FMDBAutoreleasing *)outError
+{
+    // Basic support for binding `?` to an NSArray, NSSet, NSOrderedSet arguments:
+    //
+    // Replace the `?` characters bound to such arguments with a comma-separated
+    // list of question marks, `?,?,...`, with as many parameters as there are
+    // in the enumerable, and flatten the arguments array.
+    //
+    // Caveat 1: we do not process queries containing `?` characters that are not
+    // parameters (such as question marks embedded in literal strings). We only
+    // process queries if and only if there is the same number of question marks
+    // and arguments.
+    //
+    // Caveat 2: we do not process queries containing `?NNN` parameters.
+    
+    
+    // Look for enumerable arguments:
+    // enumerableIndexSet contain indexes of enumerable arguments
+    
+    Class NSOrderedSetClass = NSClassFromString(@"NSOrderedSet");   // NSOrderedSet class may not exist yet.
+    NSMutableIndexSet *enumerableIndexSet = [NSMutableIndexSet indexSet];
+    NSUInteger argumentsCount = arguments.count;
+    for (NSUInteger i = 0; i < argumentsCount; ++i) {
+        id argument = [arguments objectAtIndex:i];
+        if ([argument isKindOfClass:[NSArray class]] || [argument isKindOfClass:[NSSet class]] || (NSOrderedSetClass && [argument isKindOfClass:NSOrderedSetClass])) {
+            [enumerableIndexSet addIndex:i];
+        }
+    }
+    
+    
+    // Check that we have any enumerable arguments
+    
+    if (enumerableIndexSet.count == 0) {
+        if (outExpandedSQL) *outExpandedSQL = sql;
+        if (outExpandedArguments) *outExpandedArguments = arguments;
+        return YES;
+    }
+    
+    
+    // We have enumerable argument(s).
+    // Now check that we have as many question marks as we have arguments.
+    
+    NSArray *SQLChunks = [sql componentsSeparatedByString:@"?"];
+    NSUInteger SQLChunkCount = SQLChunks.count;
+    
+    if (SQLChunkCount != argumentsCount + 1) {
+        // We do not have as many `?` as we have arguments: we don't know which ones are bound to arrays :-(
+        if (outError) *outError = [self errorWithMessage:@"NSArray arguments could not be bound. You may flatten arguments, and provide as many matching `?` in the query."];
+        return NO;
+    }
+    
+    
+    // We have as many `?` as we have arguments.
+    // Now check that none of them are `?NNN` positioned parameters:
+    
+    for (NSUInteger i = 1; i < SQLChunkCount; ++i) {
+        NSString *SQLChunk = [SQLChunks objectAtIndex:i];
+        unichar characterFollowingQuestionMark = [SQLChunk characterAtIndex:0];
+        if (characterFollowingQuestionMark >= '0' && characterFollowingQuestionMark <= '9') {
+            // We do not support `?NNN` positioned parameters.
+            if (outError) *outError = [self errorWithMessage:@"NSArray arguments could not be bound, because the query contains a `?NNN` parameter."];
+            return NO;
+        }
+    }
+    
+    
+    // OK, let's expand SQL and arguments
+    
+    NSMutableArray *expandedArguments = [NSMutableArray array];                // expanded arguments
+    NSMutableString *expandedSQL = [[SQLChunks objectAtIndex:0] mutableCopy];  // query with expanded `?,?,...`
+    NSEnumerator *SQLChunkEnumerator = [SQLChunks objectEnumerator];
+    [SQLChunkEnumerator nextObject];
+    
+    for (NSUInteger i = 0; i < argumentsCount; ++i) {
+        id argument = [arguments objectAtIndex:i];
+        
+        if ([enumerableIndexSet containsIndex:i]) {
+            
+            // enumerable argument
+            
+            BOOL initial = YES;
+            for (id object in argument) {
+                if (initial) {
+                    [expandedSQL appendString:@"?"];
+                } else {
+                    [expandedSQL appendString:@",?"];
+                }
+                [expandedArguments addObject:object];
+                initial = NO;
+            }
+        }
+        else {
+            
+            // non-enumerable argument
+            
+            [expandedSQL appendString:@"?"];
+            [expandedArguments addObject:argument];
+        }
+        
+        [expandedSQL appendString:[SQLChunkEnumerator nextObject]];
+    }
+    
+    if (outExpandedSQL) *outExpandedSQL = expandedSQL;
+    if (outExpandedArguments) *outExpandedArguments = expandedArguments;
+    return YES;
 }
 
 @end
