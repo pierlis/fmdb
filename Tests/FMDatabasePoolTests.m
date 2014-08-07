@@ -36,7 +36,10 @@
     [super setUp];
     // Put setup code here. This method is called before the invocation of each test method in the class.
     
-    self.pool = [FMDatabasePool databasePoolWithPath:self.databasePath];
+    [self setPool:[FMDatabasePool databasePoolWithPath:self.databasePath]];
+    
+    [[self pool] setDelegate:self];
+    
 }
 
 - (void)tearDown
@@ -247,6 +250,13 @@
     });
     
     XCTAssert([self.pool countOfOpenDatabases] < 64, @"There should be significantly less than 64 databases after that stress test");
+}
+
+
+- (BOOL)databasePool:(FMDatabasePool*)pool shouldAddDatabaseToPool:(FMDatabase*)database {
+    [database setMaxBusyRetryTimeInterval:10];
+    // [database setCrashOnErrors:YES];
+    return YES;
 }
 
 - (void)testReadWriteStressTest

@@ -1,8 +1,10 @@
+/* main.m
+ *
+ * Sample code to illustrate some of the basic FMDB classes and run them through their paces for illustrative purposes.
+ */
+
 #import <Foundation/Foundation.h>
-#import "FMDatabase.h"
-#import "FMDatabaseAdditions.h"
-#import "FMDatabasePool.h"
-#import "FMDatabaseQueue.h"
+#import "FMDB.h"
 
 #define FMDBQuickCheck(SomeBool) { if (!(SomeBool)) { NSLog(@"Failure on line %d", __LINE__); abort(); } }
 
@@ -54,7 +56,7 @@ int main (int argc, const char * argv[]) {
     }
     
     NSError *err = 0x00;
-    FMDBQuickCheck(![db update:@"blah blah blah" withErrorAndBindings:&err]);
+    FMDBQuickCheck(![db executeUpdate:@"blah blah blah" withErrorAndBindings:&err]);
     FMDBQuickCheck(err != nil);
     FMDBQuickCheck([err code] == SQLITE_ERROR);
     NSLog(@"err: '%@'", err);
@@ -73,14 +75,14 @@ int main (int argc, const char * argv[]) {
     
     
     // how do we do pragmas?  Like so:
-    FMResultSet *ps = [db executeQuery:@"PRAGMA journal_mode=delete"];
+    FMResultSet *ps = [db executeQuery:@"pragma journal_mode=delete"];
     FMDBQuickCheck(![db hadError]);
     FMDBQuickCheck(ps);
     FMDBQuickCheck([ps next]);
     [ps close];
     
     // oh, but some pragmas require updates?
-    [db executeUpdate:@"PRAGMA page_size=2048"];
+    [db executeUpdate:@"pragma page_size=2048"];
     FMDBQuickCheck(![db hadError]);
     
     // what about a vacuum?
@@ -229,13 +231,12 @@ int main (int argc, const char * argv[]) {
     }
     
 #endif
-    
-    
-    
-    
+
+
     {
         // -------------------------------------------------------------------------------
         // Named parameters count test.
+
         FMDBQuickCheck([db executeUpdate:@"create table namedparamcounttest (a text, b text, c integer, d double)"]);
         NSMutableDictionary *dictionaryArgs = [NSMutableDictionary dictionary];
         [dictionaryArgs setObject:@"Text1" forKey:@"a"];
@@ -343,7 +344,7 @@ int main (int argc, const char * argv[]) {
     
     // test the busy rety timeout schtuff.
     
-    [db setBusyTimeout:5];
+    [db setMaxBusyRetryTimeInterval:5];
     
     FMDatabase *newDb = [FMDatabase databaseWithPath:dbPath];
     [newDb open];
@@ -751,7 +752,7 @@ int main (int argc, const char * argv[]) {
     
     
     {
-        FMDBQuickCheck(([db update:@"insert into t5 values (?, ?, ?, ?, ?)" withErrorAndBindings:&err, @"text", [NSNumber numberWithInt:42], @"BLOB", @"d", [NSNumber numberWithInt:0]]));
+        FMDBQuickCheck(([db executeUpdate:@"insert into t5 values (?, ?, ?, ?, ?)" withErrorAndBindings:&err, @"text", [NSNumber numberWithInt:42], @"BLOB", @"d", [NSNumber numberWithInt:0]]));
         
     }
     
@@ -824,7 +825,7 @@ int main (int argc, const char * argv[]) {
     }
     
     // just for fun.
-    rs = [db executeQuery:@"PRAGMA database_list"];
+    rs = [db executeQuery:@"pragma database_list"];
     while ([rs next]) {
         NSString *file = [rs stringForColumn:@"file"];
         NSLog(@"database_list: %@", file);
@@ -894,8 +895,8 @@ int main (int argc, const char * argv[]) {
         }];
         
     }
-	
-	FMDatabaseQueue *queue2 = [FMDatabaseQueue databaseQueueWithPath:dbPath flags:SQLITE_OPEN_READONLY];
+    
+    FMDatabaseQueue *queue2 = [FMDatabaseQueue databaseQueueWithPath:dbPath flags:SQLITE_OPEN_READONLY];
     
     FMDBQuickCheck(queue2);
     {
@@ -919,7 +920,7 @@ int main (int argc, const char * argv[]) {
             FMDBQuickCheck(!ok);
         }];
     }
-	
+    
     {
         // You should see pairs of numbers show up in stdout for this stuff:
         size_t ops = 16;
@@ -1075,7 +1076,6 @@ int main (int argc, const char * argv[]) {
         testStatementCaching();
         
     }];
-    
     
     NSLog(@"That was version %@ of sqlite", [FMDatabase sqliteLibVersion]);
     
@@ -1377,7 +1377,7 @@ void testPool(NSString *dbPath) {
         NSLog(@"Number of open databases after crazy gcd stuff: %ld", [dbPool countOfOpenDatabases]);
     }
     
-	FMDatabasePool *dbPool2 = [FMDatabasePool databasePoolWithPath:dbPath flags:SQLITE_OPEN_READONLY];
+    FMDatabasePool *dbPool2 = [FMDatabasePool databasePoolWithPath:dbPath flags:SQLITE_OPEN_READONLY];
     
     FMDBQuickCheck(dbPool2);
     {
